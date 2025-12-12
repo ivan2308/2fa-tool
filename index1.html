@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>H2 极速 2FA (云同步版)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/otpauth/9.1.4/otpauth.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --success-color: #10b981;
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-color: #1f2937;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            padding: 20px;
+            margin: 0;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            position: relative;
+        }
+
+        h2 { text-align: center; margin-bottom: 20px; color: #111827; }
+
+        /* 顶部工具栏 */
+        .toolbar {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 15px;
+        }
+        
+        .btn-sync {
+            background-color: var(--success-color);
+            color: white;
+            font-size: 0.9rem;
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        /* 验证码卡片样式 */
+        .token-list { list-style: none; padding: 0; margin: 0; }
+        
+        .token-item {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.1s;
+        }
+        
+        .token-item:active { transform: scale(0.99); }
+
+        .token-info h3 { margin: 0; font-size: 0.95rem; color: #6b7280; font-weight: 500; }
+        .token-code {
+            font-family: 'Courier New', monospace;
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            letter-spacing: 3px;
+            margin-top: 4px;
+        }
+
+        .btn-delete {
+            background: transparent;
+            color: #ef4444;
+            border: 1px solid #ef4444;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            margin-left: 10px;
+        }
+
+        /* 倒计时条 */
+        .countdown-bar {
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: #e5e7eb;
+            border-radius: 16px 16px 0 0;
+            overflow: hidden;
+        }
+        .progress {
+            height: 100%;
+            background: var(--primary-color);
+            width: 100%;
+            transition: width 1s linear;
+        }
+
+        /* 添加表单区域 */
+        .add-section {
+            background: #f9fafb;
+            padding: 16px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px dashed #d1d5db;
+        }
+        .input-group { margin-bottom: 10px; }
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .btn-add {
+            width: 100%;
+            padding: 12px;
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        /* 模态框 (弹窗) */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 350px;
+            text-align: center;
+        }
+        .modal-input {
+            width: 100%;
+            padding: 10px;
+            margin: 15px 0;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .modal-btns { display: flex; gap: 10px; }
+        .modal-btns button { flex: 1; padding: 10px; border-radius: 6px; border: none; cursor: pointer; }
+        .btn-confirm { background: var(--primary-color); color: white; }
+        .btn-cancel { background: #e5e7eb; color: #374151; }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="countdown-bar"><div class="progress" id="progressBar"></div></div>
+    
+    <div class="toolbar">
+        <button class="btn-sync" onclick="showSyncModal()">☁️ 跨设备同步</button>
+    </div>
+
+    <h2 id="pageTitle">我的 2FA 令牌</h2>
+
+    <ul class="token-list" id="tokenList"></ul>
+
+    <div class="add-section">
+        <div class="input-group">
+            <input type="text" id="accName" placeholder="账户名称 (如: Google 邮箱)">
+        </div>
+        <div class="input-group">
+            <input type="text" id="accSecret" placeholder="密钥 (Secret Key)">
+        </div>
+        <button class="btn-add" onclick="addAccount()">+ 添加新账户</button>
+    </div>
+</div>
+
+<div id="syncModal" class="modal">
+    <div class="modal-content">
+        <h3 id="modalTitle">生成同步链接</h3>
+        <p style="font-size: 0.9em; color: #666;" id="modalDesc">
+            设置一个密码来加密你的数据。生成的链接可以发送给其他设备打开。
+        </p>
+        <input type="password" id="syncPassword" class="modal-input" placeholder="设置加密密码">
+        <div class="modal-btns">
+            <button class="btn-cancel" onclick="closeModal()">取消</button>
+            <button class="btn-confirm" id="modalActionBtn" onclick="generateLink()">生成链接</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const STORAGE_KEY = 'h2_2fa_data';
+    let accounts = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+    let importDataString = null; // 用于存储待导入的数据
+
+    // 1. 初始化：检查URL是否有数据（是否是同步操作）
+    window.onload = function() {
+        const hash = window.location.hash;
+        if (hash && hash.startsWith('#sync=')) {
+            // 如果链接里有 sync=... 说明是来导入数据的
+            importDataString = hash.substring(6); // 去掉 #sync=
+            
+            // 修改界面为“导入模式”
+            document.getElementById('syncModal').style.display = 'flex';
+            document.getElementById('modalTitle').innerText = '🔐 解锁同步数据';
+            document.getElementById('modalDesc').innerText = '检测到同步数据，请输入密码进行解密和导入。注意：这将覆盖当前的记录。';
+            document.getElementById('syncPassword').placeholder = '输入对方设置的密码';
+            
+            const actionBtn = document.getElementById('modalActionBtn');
+            actionBtn.innerText = '解密并导入';
+            actionBtn.onclick = decryptAndImport;
+        } else {
+            renderList();
+        }
+    };
+
+    // 2. 核心功能：生成验证码并渲染
+    function renderList() {
+        const list = document.getElementById('tokenList');
+        list.innerHTML = '';
+        
+        if(accounts.length === 0) {
+            list.innerHTML = '<div style="text-align:center;color:#999;padding:20px;">暂无数据<br>请下方添加密钥或使用同步功能</div>';
+            return;
+        }
+
+        accounts.forEach((acc, idx) => {
+            let code = '...';
+            try {
+                const totp = new OTPAuth.TOTP({
+                    algorithm: 'SHA1', digits: 6, period: 30,
+                    secret: OTPAuth.Secret.fromBase32(acc.secret.replace(/\s/g,''))
+                });
+                code = totp.generate();
+            } catch(e) { code = 'KEY ERROR'; }
+
+            const li = document.createElement('li');
+            li.className = 'token-item';
+            li.innerHTML = `
+                <div class="token-info"><h3>${acc.name}</h3><div class="token-code">${code}</div></div>
+                <button class="btn-delete" onclick="delAccount(${idx})">×</button>
+            `;
+            list.appendChild(li);
+        });
+    }
+
+    // 3. 添加账户
+    function addAccount() {
+        const name = document.getElementById('accName').value.trim();
+        const secret = document.getElementById('accSecret').value.trim();
+        if(!name || !secret) return alert('请填写完整');
+        
+        accounts.push({ name, secret });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+        renderList();
+        
+        document.getElementById('accName').value = '';
+        document.getElementById('accSecret').value = '';
+    }
+
+    function delAccount(idx) {
+        if(confirm('确定删除?')) {
+            accounts.splice(idx, 1);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+            renderList();
+        }
+    }
+
+    // 4. 同步功能 - 生成链接
+    function showSyncModal() {
+        document.getElementById('syncModal').style.display = 'flex';
+        // 重置为生成模式
+        document.getElementById('modalTitle').innerText = '☁️ 生成同步链接';
+        document.getElementById('modalDesc').innerText = '设置密码加密数据。生成的链接请在 30 分钟内使用（虽然永久有效，但建议尽快同步）。';
+        document.getElementById('syncPassword').placeholder = '设置一个临时密码';
+        const btn = document.getElementById('modalActionBtn');
+        btn.innerText = '复制链接';
+        btn.onclick = generateLink;
+    }
+
+    function generateLink() {
+        const pwd = document.getElementById('syncPassword').value;
+        if(!pwd) return alert('为了安全，必须设置密码！');
+        if(accounts.length === 0) return alert('你还没有任何账户数据可同步');
+
+        try {
+            // 加密数据
+            const dataStr = JSON.stringify(accounts);
+            const encrypted = CryptoJS.AES.encrypt(dataStr, pwd).toString();
+            
+            // 构建URL (当前页面URL + #sync=加密数据)
+            // 注意：因为URL有长度限制，如果数据太多可能会失败，但几十个账号通常没问题
+            const baseUrl = window.location.href.split('#')[0];
+            const syncUrl = `${baseUrl}#sync=${encodeURIComponent(encrypted)}`;
+
+            // 复制到剪贴板
+            navigator.clipboard.writeText(syncUrl).then(() => {
+                alert('✅ 链接已复制！\n请将此链接发送到你的手机或其他电脑打开，输入相同密码即可同步。');
+                closeModal();
+            }).catch(err => {
+                prompt("自动复制失败，请手动复制以下链接：", syncUrl);
+            });
+
+        } catch(e) {
+            alert('生成失败: ' + e.message);
+        }
+    }
+
+    // 5. 同步功能 - 解密导入
+    function decryptAndImport() {
+        const pwd = document.getElementById('syncPassword').value;
+        if(!pwd) return alert('请输入密码');
+
+        try {
+            // 解码URL数据
+            const encrypted = decodeURIComponent(importDataString);
+            // 解密
+            const bytes = CryptoJS.AES.decrypt(encrypted, pwd);
+            const decryptedData = JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+
+            if(Array.isArray(decryptedData)) {
+                if(confirm(`成功解密！发现了 ${decryptedData.length} 个账户。\n点击确定将覆盖当前浏览器的记录。`)) {
+                    accounts = decryptedData;
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(accounts));
+                    window.location.hash = ''; // 清除URL hash
+                    closeModal();
+                    renderList();
+                    alert('导入成功！');
+                }
+            } else {
+                throw new Error('数据格式错误');
+            }
+        } catch(e) {
+            alert('❌ 密码错误或数据损坏，请重试。');
+        }
+    }
+
+    function closeModal() {
+        document.getElementById('syncModal').style.display = 'none';
+        document.getElementById('syncPassword').value = '';
+    }
+
+    // 定时器
+    setInterval(() => {
+        const epoch = Math.round(new Date().getTime() / 1000.0);
+        document.getElementById('progressBar').style.width = ((30 - (epoch % 30)) / 30 * 100) + '%';
+        if(epoch % 30 === 0) renderList();
+    }, 1000);
+
+    renderList();
+</script>
+
+</body>
+</html>
